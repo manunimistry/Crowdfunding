@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.0;
 
 contract Crowdfunding {
     string public name;
@@ -7,9 +7,9 @@ contract Crowdfunding {
     uint256 public goal;
     uint256 public deadline;
     address public owner;
+    bool public paused;
 
     enum CampaignState { Active, Successful, Failed }
-
     CampaignState public state;
 
     struct Tier {
@@ -18,9 +18,13 @@ contract Crowdfunding {
         uint256 backers;
     }
 
-    //continur from 52:25, refund
+    struct Backer {
+        uint256 totalContribution;
+        mapping (uint256 => bool) fundedTiers;
+    }
 
     Tier[] public tiers;
+    mapping(address=>Backer) public backers;
 
     modifier onlyOwner(){
         require(msg.sender == owner, "Not the owner.");
@@ -29,6 +33,11 @@ contract Crowdfunding {
 
     modifier campaignOpen() {
         require(state == CampaignState.Active, "Campaign is not active.");
+        _;
+    }
+
+    modifier notPaused(){
+        require(!paused, "Contract is Paused.");
         _;
     }
 
@@ -51,13 +60,15 @@ contract Crowdfunding {
         state = CampaignState.Active;
     }
 
-    function fund(uint256 _tierIndex) public payable {
-        require(msg.value > 0, "Must fund amount greater than 0.");
-        require(block.timestamp < deadline, "Campaign has ended.");
+    function fund(uint256 _tierIndex) public payable campaignOpen notPaused{
+        
+        
         require(_tierIndex < tiers.length, "Invalid tier.");
         require(msg.value == tiers[_tierIndex].amount,"Incorrect amount");
 
         tiers[_tierIndex].backers++;
+        backers[msg.sender].totalContribution += msg.value; 
+        backers[msg.sender].fundedTiers[_tierIndex] = true;
 
         checkAndUpdateCampaignState();
 
@@ -87,5 +98,38 @@ contract Crowdfunding {
 
     function getContractBalance() public view returns(uint256){
         return address(this).balance;
+    }
+
+    function refund() public {
+        checkAndUpdateCampaignState();
+        require(state == CampaignState.Failed, "Refund not available.");
+        uint256 amount = backers[msg.sender].totalContribution;
+        require(amount>0,"No contribution to refund");
+
+        backers[msg.sender].totalContribution = 0;
+        payable(msg.sender).transfer(amount);
+    }
+
+    function hasFundedTier(address _backer, uint256 _tierIndex) public view returns (bool){
+        return backers[_backer].fundedTiers[_tierIndex];
+    }
+
+    function getTiers() public view returns(Tier[] memory) {
+        return tiers;
+    }
+
+    function togglePause() public onlyOwner {
+        paused = !paused;
+    }
+
+    function getCampaignStatus() public view returns(CampaignState){
+        if(state == CampaignState.Active && block.timestamp > deadline){
+            return address(this).balance >= goal ? CampaignState.Successful : CampaignState.Failed;
+        }
+        return state;
+    }
+
+    function extendDeadline(uint256 _daysToAdd) public onlyOwner campaignOpen {
+        deadline += _daysToAdd * 1 days;
     }
 }
